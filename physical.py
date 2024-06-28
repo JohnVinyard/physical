@@ -98,9 +98,80 @@ class Node(object):
         
         # velocity modifies position
         self.pos += self.velocity
-        
-        
 
+
+def plate(
+        width: int=8, 
+        mass: float=1, 
+        tension: float=0.01, 
+        damping: float=0.999, 
+        target_node_index: List[int] = [0, 0], 
+        starting_displacement: np.ndarray = np.ones((3,))):
+    
+    print('Creating nodes')
+    nodes = [
+        [Node(
+            np.array([0, i, j], dtype=np.float32), 
+            mass=mass, 
+            tension=tension, 
+            damping=damping
+        ) for j in range(width)] for i in range(width)]
+    
+    print('connecting network')
+    for i in range(1, width - 1):
+        for j in range(1, width - 1):
+            n = nodes[i][j]
+            n.neighbors = [
+                nodes[i - 1][j - 1], 
+                nodes[i][j - 1], 
+                nodes[i + 1][j - 1], 
+                nodes[i + 1][j], 
+                nodes[i + 1][j + 1], 
+                nodes[i][j + 1], 
+                nodes[i - 1][j + 1], 
+                nodes[i - 1][j], 
+            ]
+    
+    # print('constrain ends')
+    # for i in range(width):
+    #     for j in range(width):
+    #         if i == 0 or i == width - 1 or j == 0 or j == width - 1:
+    #             nodes[i][j].constrained = True
+    
+    target_node = nodes[target_node_index[0]][target_node_index[1]]
+    
+    n_samples = 2 ** 15
+    recording = np.zeros((n_samples,))
+    
+    for s in range(n_samples):
+        
+        for i in range(width):
+            for j in range(width):
+                node = nodes[i][j]
+                if node == target_node and s == 1024:
+                    target_node.apply_force(starting_displacement)
+                node.update(s)
+        
+        for i in range(width):
+            for j in range(width):
+                node = nodes[i][j]
+                node.step()
+        
+        recording[s] = target_node.pos[0]
+        
+    
+    plt.plot(recording[:])
+    plt.show()
+    
+    _, _, spec = stft(recording, 1, window='hann')
+    plt.matshow(np.flipud(np.abs(spec.astype(np.float32))))
+    plt.show()
+    
+    recording = recording / (recording.max() + 1e-3)
+    listen_to_sound(recording, True)
+        
+        
+        
 def multiple_nodes(
         n_nodes: int=10, 
         mass: float=1, 
@@ -166,12 +237,20 @@ def multiple_nodes(
 
     
 if __name__ == '__main__':
-    multiple_nodes(
-        n_nodes=16, 
-        mass=2, 
-        tension=1, 
-        damping=0.999, 
-        target_node_index=5, 
-        starting_displacement=np.array([0.01, 0.01, 0.1]))
+    # multiple_nodes(
+    #     n_nodes=8, 
+    #     mass=16, 
+    #     tension=1, 
+    #     damping=0.999, 
+    #     target_node_index=4, 
+    #     starting_displacement=np.array([10, 10, 10]))
+    
+    plate(
+        width=8, 
+        mass=16, 
+        tension=0.5, 
+        damping=0.9998, 
+        target_node_index=[1, 3], 
+        starting_displacement=np.array([1, 1, 0]))
         
     
