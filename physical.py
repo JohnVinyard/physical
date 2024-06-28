@@ -1,5 +1,5 @@
+from typing import List
 import numpy as np
-# import zounds
 from soundfile import SoundFile
 from io import BytesIO
 from matplotlib import pyplot as plt
@@ -28,12 +28,24 @@ def listen_to_sound(samples: np.ndarray, wait_for_user_input: bool = True) -> No
 
 class Node(object):
     
+    home: np.ndarray
+    pos: np.ndarray
+    mass: float
+    tension: float
+    damping: float
+    velocity: np.ndarray
+    _acceleration: np.ndarray
+    constrained: bool
+    neighbors: List['Node']
+    
     def __init__(
             self, 
             home: np.ndarray, 
             mass: float, 
             tension: float, 
-            damping: float):
+            damping: float,
+            constrained: bool = False,
+            neighbors: List['Node'] = []):
         
         super().__init__()
         self.home = home
@@ -41,51 +53,105 @@ class Node(object):
         self.mass = mass
         self.tension = tension
         self.damping = damping
-        
         self.velocity = np.zeros(home.shape)
-        
         self._acceleration = np.zeros(self.velocity.shape)
+        self.constrained = constrained
+        self.neighbors = neighbors
     
     @property
     def force(self):
         return self.mass * np.linalg.norm(self._acceleration)
     
-    def displace(self, new_pos: np.ndarray) -> None:
-        self.pos = new_pos
+    def _compute_home_position(self):
+        if self.neighbors:
+            s = np.stack([n.pos for n in self.neighbors])
+            home = np.mean(s, axis=0)
+            return home
+        
+        return self.home
     
-    def step(self, iteration: int = 0):
-        diff = self.home - self.pos
-        # direction = diff / (np.linalg.norm(diff) + 1e-8)
+    def apply_force(self, force: np.ndarray):
+        self.velocity += force
+    
+    def update(self, iteration: int = 0):
+        # compute the direction in which this node will be pulled
+        # by gravity or its resting point
+        diff = self._compute_home_position() - self.pos
         direction = diff
         
+        # acceleration is a function of tension and mass
         acceleration = (self.tension * direction) / self.mass
         self._acceleration = acceleration
         
+        # acceleration modifies velocity
         self.velocity += acceleration
         
+        # drag reduces velocity
+        self.velocity *= self.damping
+
+    def step(self, iteration: int = 0):
+        
+        if self.constrained:
+            # this node is held in place   
+            self.pos = self.pos
+            return
+        
+        # velocity modifies position
         self.pos += self.velocity
         
-        self.velocity *= self.damping
         
+
+def multiple_nodes(
+        n_nodes: int=10, 
+        mass: float=1, 
+        tension: float=0.01, 
+        damping: float=0.999,
+        target_node_index: int=5,
+        starting_displacement=np.ones((3,))):
+
+    print(f'creating {n_nodes} nodes')
+    
+    nodes = [
+        Node(
+            np.array([0, 0, i], dtype=np.float32), 
+            mass=mass, 
+            tension=tension, 
+            damping=damping) 
+        for i in np.linspace(0, 1, n_nodes)
+    ]
+    
+    print(f'connecting network')
+    
+    # connect the network
+    for i in range(1, n_nodes - 1):
+        target = nodes[i]
+        target.neighbors = [nodes[i - 1], nodes[i + 1]]
+        print(f'setting neighbors for node {i}')
         
+    print(f'constrain ends')
+    # fix the ends
+    nodes[0].constrained = True
+    nodes[-1].constrained = True
     
     
-if __name__ == '__main__':
-    node = Node(
-        np.array([0, 0, 0], dtype=np.float32) + 1e-3, 
-        mass=500, 
-        tension=0.1, 
-        damping=0.999)
+    print(f'snap all nodes to new homes')
+    target_node = nodes[target_node_index]
     
-    node.displace(np.array([1, 1, 1], dtype=np.float32) * 1000)
     
     n_samples = 2**15
     
     recording = np.zeros((n_samples,))
     
     for i in range(n_samples):
-        node.step(i)
-        recording[i] = node.pos[1]
+        for node in nodes:
+            if i == 1024 and node == target_node:
+                target_node.apply_force(starting_displacement)
+            node.update(i)
+            
+        for node in nodes:
+            node.step(i)
+        
+        recording[i] = target_node.pos[0]
     
     plt.plot(recording[:])
     plt.show()
@@ -96,5 +162,16 @@ if __name__ == '__main__':
     
     recording = recording / (recording.max() + 1e-3)
     listen_to_sound(recording, True)
+    
+
+    
+if __name__ == '__main__':
+    multiple_nodes(
+        n_nodes=16, 
+        mass=2, 
+        tension=1, 
+        damping=0.999, 
+        target_node_index=5, 
+        starting_displacement=np.array([0.01, 0.01, 0.1]))
         
     
