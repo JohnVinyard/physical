@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Dict
 import numpy as np
 from soundfile import SoundFile
 from io import BytesIO
@@ -7,6 +7,7 @@ from subprocess import Popen, PIPE
 from scipy.signal import stft
 from time import time
 from numba import jit
+
 
 # TODO: It might be nice to move this into zounds
 def listen_to_sound(
@@ -39,13 +40,305 @@ def evaluate(recording: np.ndarray):
     plt.show()
     
     _, _, spec = stft(recording, 1, window='hann')
-    plt.matshow(np.flipud(np.abs(spec.astype(np.float32))))
+    spec = np.flipud(np.abs(spec).astype(np.float32))
+    spec = np.log(spec + 1e-3)
+    plt.matshow(spec)
     plt.show()
     
     recording = recording / (recording.max() + 1e-3)
     listen_to_sound(recording, True)
 
- 
+
+
+class Mass(object):
+
+    def __init__(
+            self,
+            _id: str,
+            position: np.ndarray,
+            mass: float,
+            damping: float,
+            fixed: bool = False):
+
+        super().__init__()
+        self._id = _id
+        self.position = position
+        self.orig_position = position.copy()
+        self.mass = mass
+        self.damping = damping
+        self.acceleration = np.zeros_like(position)
+        self.velocity = np.zeros_like(position)
+        self.fixed = fixed
+
+    def __str__(self):
+        return f'Mass({self._id}, {self.fixed})'
+
+    def __repr__(self):
+        return self.__str__()
+
+    def __hash__(self):
+        return hash(self._id)
+
+    def diff(self):
+        return self.position - self.orig_position
+
+    # def displacement(self):
+    #     c = self.position - self.orig_position
+    #     n = np.linalg.norm(c)
+    #     s = np.sign
+    #     return np.linalg.norm(self.position - self.orig_position)
+
+    def apply_force(self, force: np.ndarray):
+        self.acceleration += force / self.mass
+
+    def update_velocity(self):
+        self.velocity += self.acceleration
+
+    def update_position(self):
+        if self.fixed:
+            return
+
+        self.position += self.velocity
+
+    def clear(self):
+        self.velocity *= self.damping
+        self.acceleration = np.zeros_like(self.acceleration)
+
+
+
+class Spring(object):
+    def __init__(self, m1: Mass, m2: Mass, tension: float):
+        super().__init__()
+        self.m1 = m1
+        self.m2 = m2
+        self.tension = tension
+
+        # 3D vector representing the resting state/length of the spring
+        self.m1_resting = self.m1.position - self.m2.position
+        self.m2_resting = self.m2.position - self.m1.position
+        # self.resting_length = np.linalg.norm(self.resting)
+
+    def __str__(self):
+        return f'Spring({self.m1}, {self.m2}, {self.tension})'
+
+    def __repr__(self):
+        return self.__str__()
+
+    def masses(self):
+        return [self.m1, self.m2]
+
+    def update_forces(self):
+        # compute for m1
+        current = self.m1.position - self.m2.position
+        displacement = self.m1_resting - current
+        self.m1.apply_force(displacement * self.tension)
+
+        # compute for m2
+        current = self.m2.position - self.m1.position
+        displacement = self.m2_resting - current
+        self.m2.apply_force(displacement * self.tension)
+
+
+class SpringMesh(object):
+    def __init__(self, springs: List[Spring]):
+        super().__init__()
+        self.springs = springs
+
+        self.all_masses = set()
+        for spring in springs:
+            self.all_masses.update(spring.masses())
+
+    def update_forces(self):
+        """
+        Apply forces exerted by each spring to the connected masses
+        """
+        for spring in self.springs:
+            spring.update_forces()
+
+    def update_velocities(self):
+        """
+        Update the velocities of each mass based on the accumulated accelerations
+        """
+        for mass in self.all_masses:
+            mass.update_velocity()
+
+    def update_positions(self):
+        """
+        Update the positions of each mass based on the accumulated velocities
+        """
+        for mass in self.all_masses:
+            mass.update_position()
+
+    def clear(self):
+        for mass in self.all_masses:
+            mass.clear()
+
+
+
+def class_based_spring_mesh(n_samples: int = 1024, do_plot: bool = False):
+    mass = 2
+    tension = 0.1
+    damping = 0.9998
+    n_masses = 20
+
+    force_target = 9
+    recording_target = 10
+
+    x_pos = np.linspace(0, 1, num=n_masses)
+    positions = np.zeros((n_masses, 3))
+    positions[:, 0] = x_pos
+
+    samples = np.zeros((n_samples,))
+
+    forces: Dict[int, np.ndarray] = {
+        4096: np.array([0.01, 0.01, 0.01]),
+        8192: np.array([0.1, 0.01, 0])
+    }
+
+    masses = [
+        Mass(str(i), pos, mass, damping, fixed=i == 0 or i == n_masses - 1)
+        for i, pos in enumerate(positions)
+    ]
+
+    springs = [
+        Spring(masses[i], masses[i + 1], tension)
+        for i in range(n_masses - 1)
+    ]
+
+    mesh = SpringMesh(springs)
+
+    for i in range(n_samples):
+
+        f = forces.get(i, None)
+        if f is not None:
+            print(f'applying force {f} at time step {i}')
+            masses[force_target].apply_force(f)
+
+
+        # apply the forces exerted by the springs
+        mesh.update_forces()
+
+        # update velocities based on the accumulated forces
+        mesh.update_velocities()
+
+        # update the positions based upon velocity
+        mesh.update_positions()
+
+        # clear the accumulated forces from this iteration and apply
+        # damping via friction to the velocity
+        mesh.clear()
+
+        samples[i] = masses[recording_target].diff()[0]
+
+        if do_plot:
+            fig = plt.figure()
+            ax = fig.add_subplot(projection='3d')
+            ax.scatter(positions[:, 0], positions[:, 1], positions[:, 2])
+            plt.show()
+
+
+
+    return samples
+
+
+# def spring_mesh(
+#         node_positions: np.ndarray,
+#         masses: np.ndarray,
+#         tensions: np.ndarray,
+#         damping: float,
+#         n_samples: int,
+#         mixer: np.ndarray,
+#         constrained_mask: np.ndarray,
+#         forces: Dict[int, np.ndarray]) -> np.ndarray:
+#
+#     """
+#     We assume that the node positions passed in represent the resting length
+#     of the springs connecting the nodes
+#
+#     Args:
+#         node_positions (np.ndarray): The N-dimensional starting positions of each
+#             mass, (n_masses, dim)
+#         masses (np.ndarray): The mass of each node, (n_masses, 1)
+#         tensions (np.ndarray): A sparse (n_masses, n_masses, 1) array defining the connectivity and the
+#             spring tensions between nodes
+#         damping (float): energy dissipation rate
+#         n_samples (int): the number of time steps to run the simulation
+#         mixer (np.ndarray): The mix over recordings from each node, an (n_masses, 1) tensor,
+#             ideally softmax-normalized
+#         constrained_mask (np.ndarray): a binary/boolean mask describing which nodes are fixed
+#             and immovable
+#         forces (Dict[int, np.ndarray]): a sparse representation of where and when forces are applied to
+#             the structure, a dict mapping sample -> (n_masses, dim)
+#     """
+#
+#     # TODO: Check to ensure that tensions is symmetrical, or
+#     # accept only the upper triangular of the tensions matrix
+#     connectivity_mask = tensions > 0
+#
+#
+#     # compute pair-wise distances between each node.  this will
+#     # be used to update forces.  This is considered to be the
+#     # resting length of each spring.  This is a fully-connected
+#     # graph, but only the positions with non-zero tensions
+#     # entries are actually connected
+#     # TODO: consider using scipy.spatial.distance.pdist
+#     dist = np.linalg.norm(
+#         node_positions[None, :] - node_positions[:, None],
+#         axis=-1,
+#         keepdims=True)
+#
+#     recording: np.ndarray = np.zeros(n_samples)
+#
+#     # first derivative of node displacement
+#     velocities = np.zeros_like(node_positions)
+#
+#     # second derivative of node displacement
+#     accelerations = np.zeros_like(node_positions)
+#
+#     for t in range(n_samples):
+#
+#         # determine if any forces were applied at this time step
+#         # then, update the forces acting upon each mass
+#         # update the positions of each node based on the accumulated forces
+#         # finally record from a single dimension of each node's position
+#         f = forces.get(t, None)
+#         if f is not None:
+#             accelerations += f
+#
+#
+#         # compute current pair-wise distances
+#         current_dist = np.linalg.norm(
+#             node_positions[None, :] - node_positions[:, None],
+#             axis=-1,
+#             keepdims=True)
+#
+#         # determine how far each node is from its resting length
+#         disp = dist - current_dist
+#
+#         # we only care about nodes that are actually connected
+#         disp *= connectivity_mask
+#
+#         # the acceleration of each node will be determined by the displacement
+#         # of the spring (symmetrical for both connected nodes) * the mass on the
+#         # other end of the spring (not symmetrical)
+#         accelerations += (tensions * disp) @ (1 / masses)
+#
+#
+#         # update velocities and apply damping
+#         velocities += accelerations
+#         velocities *= damping
+#
+#         # update positions for nodes that are not constrained/fixed
+#         node_positions += velocities * constrained_mask
+#
+#         # record the displacement of each node, from its original
+#         # position, weighted by mixer
+#         recording[t] = mixer @ current_dist
+#
+#
+#     return recording
+
+
 @jit(nopython=True, nogil=True)
 def physical_modelling(
         positions: np.ndarray, 
@@ -59,7 +352,8 @@ def physical_modelling(
         force_application_time: int,
         force_applied: np.ndarray):
     
-    """_summary_
+    """Model the resonance of a physical object as a mesh of nodes connected by
+    springs with homogeneous mass, tension and damping
 
     Args:
         positions (np.ndarray): (n_nodes, 3) array, representing start positions
@@ -76,7 +370,8 @@ def physical_modelling(
     node_count: int = positions.shape[0]
     dim: int = positions.shape[1]
     
-    acceleration = np.zeros((node_count, dim), dtype=np.float32)
+    # acceleration = np.zeros((node_count, dim), dtype=np.float32)
+
     velocity = np.zeros((node_count, dim), dtype=np.float32)
     recording = np.zeros(n_samples, dtype=np.float32)
     constrained_mask = constrained_mask.reshape((node_count, 1))
@@ -109,10 +404,44 @@ def physical_modelling(
     
     return recording
 
+"""
+TODO:
+Starting with two matrices
+
+
+positions: (n_nodes, 3) array, representing start positions
+velocities: (n_nodes, 3) array, representing node velocity
+masses:    (n_nodes, 1) array, representing node masses
+distances: (n_nodes, n_nodes) array, representing distances between nodes
+connectivity: (n_nodes, n_nodes) binary mask matrix, representing connectivty between nodes
+tensions: (n_nodes, n_nodes) symmetric matrix representing tensions of connections between nodes
+external_forces: (n_nodes, 3, time) force applied to each node at time t
+
+
+At each time step t:
+    initialize a (n_nodes, 3) matrix to collect forces
+    check if there is an external force applied to this node at this time step
+    
+    check the current distances between connected nodes and add any resultant
+    forces into the temporary matrix .
+    
+    sum accumulated forces to get each nodes' acceleration
+    add accelerations to each node's velocity
+    
+    add velocities to each nodes' position
+
+At step 1:
+    - a force is applied which moves a single node
+
+At step 2:
+    - ???
+"""
+
 def plate_simulation():
     # TODO: This should be very similar to the string simulation, but with a
     # different adjacency matrix
     pass
+    
 
 def string_simulation():
     n_nodes, dim = 64, 3
@@ -167,10 +496,15 @@ def string_simulation():
     
     
 if __name__ == '__main__':
-    
+
+    samples = class_based_spring_mesh(n_samples=2**16)
+    print(samples.shape)
+    evaluate(samples)
+
     # Using numba's @jit is slower the first time, but
     # more than twice as fast on subsequent runs
-    string_simulation()
-    string_simulation()
-    string_simulation()
+    # string_simulation()
+    # string_simulation()
+    # string_simulation()
+    
     
