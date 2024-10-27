@@ -1,5 +1,6 @@
-from typing import List, Dict
+from typing import List, Dict, Union
 import numpy as np
+from scipy.optimize import direct
 from soundfile import SoundFile
 from io import BytesIO
 from matplotlib import pyplot as plt
@@ -62,12 +63,12 @@ class Mass(object):
 
         super().__init__()
         self._id = _id
-        self.position = position
-        self.orig_position = position.copy()
+        self.position = position.astype(np.float32)
+        self.orig_position = self.position.copy()
         self.mass = mass
         self.damping = damping
-        self.acceleration = np.zeros_like(position)
-        self.velocity = np.zeros_like(position)
+        self.acceleration = np.zeros_like(self.position)
+        self.velocity = np.zeros_like(self.position)
         self.fixed = fixed
 
     def __str__(self):
@@ -81,12 +82,6 @@ class Mass(object):
 
     def diff(self):
         return self.position - self.orig_position
-
-    # def displacement(self):
-    #     c = self.position - self.orig_position
-    #     n = np.linalg.norm(c)
-    #     s = np.sign
-    #     return np.linalg.norm(self.position - self.orig_position)
 
     def apply_force(self, force: np.ndarray):
         self.acceleration += force / self.mass
@@ -116,7 +111,6 @@ class Spring(object):
         # 3D vector representing the resting state/length of the spring
         self.m1_resting = self.m1.position - self.m2.position
         self.m2_resting = self.m2.position - self.m1.position
-        # self.resting_length = np.linalg.norm(self.resting)
 
     def __str__(self):
         return f'Spring({self.m1}, {self.m2}, {self.tension})'
@@ -174,15 +168,109 @@ class SpringMesh(object):
             mass.clear()
 
 
-
-def class_based_spring_mesh(n_samples: int = 1024, do_plot: bool = False):
+def class_based_plate(n_samples: int, record_all: bool = False):
     mass = 2
-    tension = 0.1
+    tension = 0.0005
     damping = 0.9998
-    n_masses = 20
 
-    force_target = 9
-    recording_target = 10
+
+    width = 6
+
+    boundaries = {0, width - 1}
+    masses: List[List[Union[None, Mass]]] = [
+        [None for _ in range(width)]
+        for _ in range(width)
+    ]
+
+
+    directions = np.array([
+        [-1, -1], [-1, 0], [-1, 1],
+        [0, -1],           [0,  1],
+        [1, -1],  [1, 0],  [1, 1],
+    ], dtype=np.int32)
+
+    for x in range(width):
+        for y in range(width):
+
+            m = Mass(
+                f'{x},{y}',
+                np.array([x, y]),
+                mass,
+                damping,
+                fixed=x in boundaries or y in boundaries)
+
+            masses[x][y] = m
+
+    springs: List[Spring] = []
+
+    for x in range(width):
+        for y in range(width):
+            current = masses[x][y]
+            for direction in directions:
+                nx, ny = current.position + direction
+                nx, ny = int(nx), int(ny)
+                try:
+                    neighbor = masses[nx][ny]
+                    s = Spring(current, neighbor, tension)
+                    springs.append(s)
+                except IndexError:
+                    pass
+
+
+    mesh = SpringMesh(springs)
+
+    force_target = [2, 2]
+    recording_target = [3, 3]
+
+    forces = {
+        2048: np.array([10, 0.1])
+    }
+
+
+    samples = np.zeros((n_samples,))
+
+    for i in range(n_samples):
+
+        f = forces.get(i, None)
+        if f is not None:
+            print(f'applying force {f} at time step {i}')
+            masses[force_target[0]][force_target[1]].apply_force(f)
+
+
+        # apply the forces exerted by the springs
+        mesh.update_forces()
+
+        # update velocities based on the accumulated forces
+        mesh.update_velocities()
+
+        # update the positions based upon velocity
+        mesh.update_positions()
+
+        # clear the accumulated forces from this iteration and apply
+        # damping via friction to the velocity
+        mesh.clear()
+
+        if record_all:
+            for x in range(width):
+                for y in range(width):
+                    samples[i] += masses[x][y].diff()[0]
+
+        else:
+            samples[i] = masses[recording_target[0]][recording_target[1]].diff()[0]
+
+
+    return samples
+
+
+
+def class_based_spring_mesh(n_samples: int = 1024, record_all: bool = False):
+    mass = 3
+    tension = 0.09
+    damping = 0.9998
+    n_masses = 30
+
+    force_target = 3
+    recording_target = 5
 
     x_pos = np.linspace(0, 1, num=n_masses)
     positions = np.zeros((n_masses, 3))
@@ -191,8 +279,8 @@ def class_based_spring_mesh(n_samples: int = 1024, do_plot: bool = False):
     samples = np.zeros((n_samples,))
 
     forces: Dict[int, np.ndarray] = {
-        4096: np.array([0.01, 0.01, 0.01]),
-        8192: np.array([0.1, 0.01, 0])
+        4096: np.array([100, 0, 0]),
+        # 8192: np.array([0.1, 0.01, 0])
     }
 
     masses = [
@@ -228,14 +316,11 @@ def class_based_spring_mesh(n_samples: int = 1024, do_plot: bool = False):
         # damping via friction to the velocity
         mesh.clear()
 
-        samples[i] = masses[recording_target].diff()[0]
-
-        if do_plot:
-            fig = plt.figure()
-            ax = fig.add_subplot(projection='3d')
-            ax.scatter(positions[:, 0], positions[:, 1], positions[:, 2])
-            plt.show()
-
+        if record_all:
+            for mass in masses:
+                samples[i] += mass.diff()[0]
+        else:
+            samples[i] = masses[recording_target].diff()[0]
 
 
     return samples
@@ -497,7 +582,12 @@ def string_simulation():
     
 if __name__ == '__main__':
 
-    samples = class_based_spring_mesh(n_samples=2**16)
+    s1 = class_based_spring_mesh(n_samples=2**16, record_all=True)
+    s2 = class_based_spring_mesh(n_samples=2**16, record_all=False)
+
+    samples = np.concatenate([s1, s2], axis=-1)
+
+    # samples = class_based_plate(n_samples=2**15, record_all=False)
     print(samples.shape)
     evaluate(samples)
 
