@@ -1,6 +1,6 @@
+from dataclasses import dataclass
 from typing import List, Dict, Union
 import numpy as np
-from scipy.optimize import direct
 from soundfile import SoundFile
 from io import BytesIO
 from matplotlib import pyplot as plt
@@ -133,6 +133,15 @@ class Spring(object):
         self.m2.apply_force(displacement * self.tension)
 
 
+
+@dataclass
+class CompiledSpringMesh:
+    positions: np.ndarray
+    masses: np.ndarray
+    tensions: np.ndarray
+    constrained_mask: np.ndarray
+
+
 class SpringMesh(object):
     def __init__(self, springs: List[Spring]):
         super().__init__()
@@ -141,6 +150,17 @@ class SpringMesh(object):
         self.all_masses = set()
         for spring in springs:
             self.all_masses.update(spring.masses())
+
+    def compile(self) -> CompiledSpringMesh:
+        return CompiledSpringMesh(
+            self.position_array,
+            self.mass_array,
+            self.tension_array,
+            self.constrained_mask)
+
+    @property
+    def constrained_mask(self):
+        return np.array([1 if m.fixed else 0 for m in self.all_masses], dtype=np.float32)
 
     @property
     def mass_array(self) -> np.ndarray:
@@ -170,6 +190,9 @@ class SpringMesh(object):
 
     @property
     def flat_mixer(self):
+        """
+        A mixing matrix that records from each node at the same amplitude
+        """
         return np.ones((len(self.all_masses),))
 
     def update_forces(self):
@@ -412,6 +435,8 @@ def spring_mesh(
             the structure, a dict mapping sample -> (n_masses, dim)
     """
 
+    n_nodes = node_positions.shape[0]
+
     # check that the tension matrix is symmetric, since a single spring with
     # a fixed tension can connect two nodes
     if not np.all(tensions == tensions.T):
@@ -419,7 +444,7 @@ def spring_mesh(
 
     orig_positions = node_positions.copy()
 
-    connectivity_mask = tensions > 0
+    connectivity_mask: np.ndarray = tensions > 0
 
     # compute vectors representing the resting states of the springs
     resting = node_positions[None, :] - node_positions[:, None]
@@ -459,20 +484,28 @@ def spring_mesh(
         d1 = resting - current
         d2 = -resting + current
 
-        accelerations += (d1 @ np.triu(tensions * connectivity_mask)) / masses
-        accelerations += (d2 @ np.tril(tensions * connectivity_mask)) / masses
+        # print(d1.shape, tensions.shape, connectivity_mask.shape, masses.shape)
+
+        # update m1
+        x = (d1 * np.triu(tensions[..., None] * connectivity_mask[..., None])).sum(axis=0)
+        accelerations +=  x / masses[..., None]
+
+        # update m2
+        x = (d2 * np.tril(tensions[..., None] * connectivity_mask[..., None])).sum(axis=0)
+        accelerations += x / masses[..., None]
 
         # update velocities and apply damping
         velocities += accelerations
         velocities *= damping
 
         # update positions for nodes that are not constrained/fixed
-        node_positions += velocities * constrained_mask
+        node_positions += velocities * constrained_mask[..., None]
 
         # record the displacement of each node, from its original
         # position, weighted by mixer
         disp = orig_positions - node_positions
-        recording[t] = mixer @ disp
+        mixed = mixer @ disp
+        recording[t] = mixed[0]
 
         # clear all the accumulated forces
         accelerations[:] = 0
@@ -635,18 +668,41 @@ def string_simulation():
     evaluate(recording)
     
     
-    
+
+def optimized_string_simulation():
+    mesh = build_string()
+    compiled = mesh.compile()
+
+    forces = {
+        2048: np.array([0.1, 0.1, 0])
+    }
+
+    samples = spring_mesh(
+        compiled.positions,
+        compiled.masses,
+        compiled.tensions,
+        damping=0.998,
+        n_samples=2**16,
+        mixer=mesh.flat_mixer,
+        constrained_mask=compiled.constrained_mask,
+        forces=forces
+    )
+
+    evaluate(samples)
+
     
 if __name__ == '__main__':
 
-    s1 = class_based_spring_mesh(n_samples=2**16, record_all=True)
-    s2 = class_based_spring_mesh(n_samples=2**16, record_all=False)
+    optimized_string_simulation()
 
-    samples = np.concatenate([s1, s2], axis=-1)
+    # s1 = class_based_spring_mesh(n_samples=2**16, record_all=True)
+    # s2 = class_based_spring_mesh(n_samples=2**16, record_all=False)
+
+    # samples = np.concatenate([s1, s2], axis=-1)
 
     # samples = class_based_plate(n_samples=2**15, record_all=False)
-    print(samples.shape)
-    evaluate(samples)
+    # print(samples.shape)
+    # evaluate(samples)
 
     # Using numba's @jit is slower the first time, but
     # more than twice as fast on subsequent runs
