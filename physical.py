@@ -7,8 +7,6 @@ from matplotlib import pyplot as plt
 from subprocess import Popen, PIPE
 from scipy.signal import stft
 from time import time
-from numba import jit
-from time import time
 
 
 # TODO: It might be nice to move this into zounds
@@ -357,7 +355,6 @@ def class_based_spring_mesh(
         force_target: int,
         n_samples: int = 1024):
 
-    # force_target = 3
 
     samples = np.zeros((n_samples,))
 
@@ -391,7 +388,6 @@ def class_based_spring_mesh(
 
 
     return samples
-
 
 def spring_mesh(
         node_positions: np.ndarray,
@@ -461,7 +457,7 @@ def spring_mesh(
 
         # update m1
         x = (d1 * np.triu(tensions[..., None] * connectivity_mask[..., None])).sum(axis=0)
-        accelerations +=  x / masses[..., None]
+        accelerations += x / masses[..., None]
 
         # update m2
         x = (d2 * np.tril(tensions[..., None] * connectivity_mask[..., None])).sum(axis=0)
@@ -469,7 +465,6 @@ def spring_mesh(
 
         # update velocities and apply damping
         velocities += accelerations
-        velocities *= damping
 
         # update positions for nodes that are not constrained/fixed
         node_positions += velocities * constrained_mask[..., None]
@@ -478,171 +473,19 @@ def spring_mesh(
         # position, weighted by mixer
         # TODO: we've already done this above, reuse the node displacement
         # calculation
-        disp = orig_positions - node_positions
+        disp = node_positions - orig_positions
         mixed = mixer @ disp
         recording[t] = mixed[0]
 
         # clear all the accumulated forces
+        velocities *= damping
+
         accelerations[:] = 0
+
 
 
     return recording
 
-
-# @jit(nopython=True, nogil=True)
-# def physical_modelling(
-#         positions: np.ndarray,
-#         mass: float,
-#         constrained_mask: np.ndarray,
-#         connectivity: np.ndarray,
-#         tension: float,
-#         damping: float,
-#         n_samples: int,
-#         recording_target_index: int,
-#         force_application_time: int,
-#         force_applied: np.ndarray):
-#
-#     """Model the resonance of a physical object as a mesh of nodes connected by
-#     springs with homogeneous mass, tension and damping
-#
-#     Args:
-#         positions (np.ndarray): (n_nodes, 3) array, representing start positions
-#         mass (float): scalar representing node masses
-#         accelerations (np.ndarray): (n_nodes, 3) array, representing node accelerations
-#         constrained_mask (np.ndarray): (n_nodes) boolean array, representing nodes that are fixed
-#         connectivity (np.ndarray): (n_nodes, n_nodes) binary mask matrix, representing connectivty between nodes
-#         tension (float): scalar representing mesh tension
-#         damping (float): scalar representing damping/friction
-#         force_application_time (int): sample index when force is applied
-#         force_applied (np.ndarray): (n_nodes, 3) array representing force applied to network
-#     """
-#
-#     node_count: int = positions.shape[0]
-#     dim: int = positions.shape[1]
-#
-#     # acceleration = np.zeros((node_count, dim), dtype=np.float32)
-#
-#     velocity = np.zeros((node_count, dim), dtype=np.float32)
-#     recording = np.zeros(n_samples, dtype=np.float32)
-#     constrained_mask = constrained_mask.reshape((node_count, 1))
-#
-#     # get the number of neighbors for each node to speed up averages in the loop
-#     neighbor_count = connectivity.sum(axis=-1).reshape((node_count, 1))
-#
-#     for i in range(n_samples):
-#
-#         # update forces first
-#
-#         if i == force_application_time:
-#             velocity += force_applied
-#
-#         # compute target/home position based averaged current
-#         # positions of neighbors
-#         # KLUDGE: This assumes that all neighbors are equidistant and
-#         # all tensions are equal
-#         home_position = (connectivity @ positions) / (neighbor_count + 1e-12)
-#         direction = home_position - positions
-#         acceleration = (tension * direction) / mass
-#         velocity += acceleration
-#         velocity *= damping
-#
-#         # update positions
-#         positions += velocity * constrained_mask
-#
-#         # record from some scalar value of the model
-#         recording[i] = positions[recording_target_index, 0]
-#
-#     return recording
-
-
-"""
-TODO:
-Starting with two matrices
-
-
-positions: (n_nodes, 3) array, representing start positions
-velocities: (n_nodes, 3) array, representing node velocity
-masses:    (n_nodes, 1) array, representing node masses
-distances: (n_nodes, n_nodes) array, representing distances between nodes
-connectivity: (n_nodes, n_nodes) binary mask matrix, representing connectivty between nodes
-tensions: (n_nodes, n_nodes) symmetric matrix representing tensions of connections between nodes
-external_forces: (n_nodes, 3, time) force applied to each node at time t
-
-
-At each time step t:
-    initialize a (n_nodes, 3) matrix to collect forces
-    check if there is an external force applied to this node at this time step
-    
-    check the current distances between connected nodes and add any resultant
-    forces into the temporary matrix .
-    
-    sum accumulated forces to get each nodes' acceleration
-    add accelerations to each node's velocity
-    
-    add velocities to each nodes' position
-
-At step 1:
-    - a force is applied which moves a single node
-
-At step 2:
-    - ???
-"""
-
-# def plate_simulation():
-#     # TODO: This should be very similar to the string simulation, but with a
-#     # different adjacency matrix
-#     pass
-    
-
-# def string_simulation():
-#     n_nodes, dim = 64, 3
-#
-#     # nodes are positioned in a line along a single dimension
-#     positions = np.zeros((n_nodes, dim))
-#     positions[:, 2] = np.linspace(0, n_nodes, n_nodes)
-#
-#     mass = 1
-#     tension = 1
-#     damping = 0.9998
-#     n_samples = 2**15
-#
-#     n_seconds = n_samples / 22050
-#
-#     # nodes with a zero value won't have position updates
-#     constrained = np.ones((n_nodes,))
-#     constrained[[0, -1]] = 0
-#
-#     # create the adjacency matrix.  Since this is a string, each
-#     # node is connected to the node directly above and below it
-#     diag = np.ones((n_nodes - 1,))
-#     adjacency = np.diag(diag, 1) + np.diag(diag, -1)
-#     # this isn't strictly necessary, but since the first and last node
-#     # are constrained, we treat them as if they have no neighbors (they
-#     # are the neighbors of other nodes, however)
-#     adjacency[0, :] = 0
-#     adjacency[-1, :] = 0
-#
-#     force_applied = np.zeros((n_nodes, 3))
-#     force_applied[33, :] = np.array([1, 10, 1])
-#
-#     start = time()
-#
-#     recording = physical_modelling(
-#         positions=positions,
-#         mass=mass,
-#         constrained_mask=constrained,
-#         connectivity=adjacency,
-#         tension=tension,
-#         damping=damping,
-#         n_samples=n_samples,
-#         recording_target_index=16,
-#         force_application_time=1024,
-#         force_applied=force_applied)
-#     end = time()
-#
-#     print(f'Generated {n_seconds} seconds of audio in {end - start} seconds')
-#     evaluate(recording)
-#
 
 
 def optimized_string_simulation(mesh: SpringMesh, force_target: int, n_samples: int = 2**15) -> np.ndarray:
@@ -659,7 +502,7 @@ def optimized_string_simulation(mesh: SpringMesh, force_target: int, n_samples: 
         compiled.positions,
         compiled.masses,
         compiled.tensions,
-        damping=0.998,
+        damping=0.9998,
         n_samples=n_samples,
         mixer=mesh.flat_mixer,
         constrained_mask=compiled.constrained_mask,
@@ -668,20 +511,37 @@ def optimized_string_simulation(mesh: SpringMesh, force_target: int, n_samples: 
 
     return samples
 
-def compare_class_and_optimized_results(n_samples: int=2**15):
+def compare_class_and_optimized_results(n_samples: int=2**15, samplerate: int = 22050):
     mesh = build_string()
     force_target = 3
+
+    audio_seconds = n_samples / samplerate
+
+    start = time()
     a = class_based_spring_mesh(
         mesh, force_target=force_target, n_samples=n_samples)
+    stop = time()
+    print(f'class-based spring mesh took {stop - start:.2f} seconds to generate {audio_seconds:.2f} seconds of audio')
     evaluate(a)
+
+    start = time()
     b = optimized_string_simulation(
         mesh, force_target=force_target, n_samples=n_samples)
+    stop = time()
+    print(f'optimized spring mesh took {stop - start:.2f} seconds to generate {audio_seconds:.2f} seconds of audio')
     evaluate(b)
+
+    # start = time()
+    # c = optimized_string_simulation(
+    #     mesh, force_target=force_target, n_samples=n_samples)
+    # stop = time()
+    # print(f'jitted spring mesh took {stop - start:.2f} seconds to generate {audio_seconds:.2f} seconds of audio')
+    # evaluate(c)
 
     
 if __name__ == '__main__':
 
-    compare_class_and_optimized_results(n_samples=2**16)
+    compare_class_and_optimized_results(n_samples=2**15)
 
     # s1 = class_based_spring_mesh(n_samples=2**16, record_all=True)
     # s2 = class_based_spring_mesh(n_samples=2**16, record_all=False)
