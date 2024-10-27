@@ -174,7 +174,7 @@ def class_based_plate(n_samples: int, record_all: bool = False):
     damping = 0.9998
 
 
-    width = 6
+    width = 8
 
     boundaries = {0, width - 1}
     masses: List[List[Union[None, Mass]]] = [
@@ -223,7 +223,7 @@ def class_based_plate(n_samples: int, record_all: bool = False):
     recording_target = [3, 3]
 
     forces = {
-        2048: np.array([10, 0.1])
+        2048: np.array([10, 10])
     }
 
 
@@ -264,10 +264,10 @@ def class_based_plate(n_samples: int, record_all: bool = False):
 
 
 def class_based_spring_mesh(n_samples: int = 1024, record_all: bool = False):
-    mass = 3
-    tension = 0.09
+    mass = 3.5
+    tension = 0.5
     damping = 0.9998
-    n_masses = 30
+    n_masses = 50
 
     force_target = 3
     recording_target = 5
@@ -582,12 +582,12 @@ def string_simulation():
     
 if __name__ == '__main__':
 
-    s1 = class_based_spring_mesh(n_samples=2**16, record_all=True)
-    s2 = class_based_spring_mesh(n_samples=2**16, record_all=False)
+    # s1 = class_based_spring_mesh(n_samples=2**16, record_all=True)
+    # s2 = class_based_spring_mesh(n_samples=2**16, record_all=False)
 
-    samples = np.concatenate([s1, s2], axis=-1)
+    # samples = np.concatenate([s1, s2], axis=-1)
 
-    # samples = class_based_plate(n_samples=2**15, record_all=False)
+    samples = class_based_plate(n_samples=2**15, record_all=False)
     print(samples.shape)
     evaluate(samples)
 
