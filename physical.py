@@ -142,6 +142,36 @@ class SpringMesh(object):
         for spring in springs:
             self.all_masses.update(spring.masses())
 
+    @property
+    def mass_array(self) -> np.ndarray:
+        return np.array([m.mass for m in self.all_masses])
+
+    @property
+    def masses(self):
+        return list(self.all_masses)
+
+    @property
+    def position_array(self) -> np.ndarray:
+        return np.array([m.position for m in self.all_masses])
+
+    @property
+    def tension_array(self):
+        n_masses = len(self.all_masses)
+        arr = np.zeros((n_masses, n_masses))
+        indexed_masses = {mass: i for i, mass in enumerate(self.all_masses)}
+
+        for spring in self.springs:
+            i1 = indexed_masses[spring.m1]
+            i2 = indexed_masses[spring.m2]
+            arr[i1, i2] = spring.tension
+            arr[i2, i1] = spring.tension
+
+        return arr
+
+    @property
+    def flat_mixer(self):
+        return np.ones((len(self.all_masses),))
+
     def update_forces(self):
         """
         Apply forces exerted by each spring to the connected masses
@@ -262,26 +292,15 @@ def class_based_plate(n_samples: int, record_all: bool = False):
     return samples
 
 
-
-def class_based_spring_mesh(n_samples: int = 1024, record_all: bool = False):
+def build_string():
     mass = 3.5
     tension = 0.5
     damping = 0.9998
     n_masses = 50
 
-    force_target = 3
-    recording_target = 5
-
     x_pos = np.linspace(0, 1, num=n_masses)
     positions = np.zeros((n_masses, 3))
     positions[:, 0] = x_pos
-
-    samples = np.zeros((n_samples,))
-
-    forces: Dict[int, np.ndarray] = {
-        4096: np.array([100, 0, 0]),
-        # 8192: np.array([0.1, 0.01, 0])
-    }
 
     masses = [
         Mass(str(i), pos, mass, damping, fixed=i == 0 or i == n_masses - 1)
@@ -294,13 +313,49 @@ def class_based_spring_mesh(n_samples: int = 1024, record_all: bool = False):
     ]
 
     mesh = SpringMesh(springs)
+    return mesh
+
+
+def class_based_spring_mesh(n_samples: int = 1024, record_all: bool = False):
+    # mass = 3.5
+    # tension = 0.5
+    # damping = 0.9998
+    # n_masses = 50
+
+    force_target = 3
+    recording_target = 5
+
+    # x_pos = np.linspace(0, 1, num=n_masses)
+    # positions = np.zeros((n_masses, 3))
+    # positions[:, 0] = x_pos
+
+    samples = np.zeros((n_samples,))
+
+    forces: Dict[int, np.ndarray] = {
+        4096: np.array([100, 0, 0]),
+        # 8192: np.array([0.1, 0.01, 0])
+    }
+
+    # masses = [
+    #     Mass(str(i), pos, mass, damping, fixed=i == 0 or i == n_masses - 1)
+    #     for i, pos in enumerate(positions)
+    # ]
+    #
+    # springs = [
+    #     Spring(masses[i], masses[i + 1], tension)
+    #     for i in range(n_masses - 1)
+    # ]
+    #
+    # mesh = SpringMesh(springs)
+
+    mesh = build_string()
 
     for i in range(n_samples):
 
         f = forces.get(i, None)
         if f is not None:
             print(f'applying force {f} at time step {i}')
-            masses[force_target].apply_force(f)
+            mesh.masses[force_target].apply_force(f)
 
 
         # apply the forces exerted by the springs
@@ -317,111 +372,113 @@ def class_based_spring_mesh(n_samples: int = 1024, record_all: bool = False):
         mesh.clear()
 
         if record_all:
-            for mass in masses:
+            for mass in mesh.masses:
                 samples[i] += mass.diff()[0]
         else:
-            samples[i] = masses[recording_target].diff()[0]
+            samples[i] = mesh.masses[recording_target].diff()[0]
 
 
     return samples
 
 
-# def spring_mesh(
-#         node_positions: np.ndarray,
-#         masses: np.ndarray,
-#         tensions: np.ndarray,
-#         damping: float,
-#         n_samples: int,
-#         mixer: np.ndarray,
-#         constrained_mask: np.ndarray,
-#         forces: Dict[int, np.ndarray]) -> np.ndarray:
-#
-#     """
-#     We assume that the node positions passed in represent the resting length
-#     of the springs connecting the nodes
-#
-#     Args:
-#         node_positions (np.ndarray): The N-dimensional starting positions of each
-#             mass, (n_masses, dim)
-#         masses (np.ndarray): The mass of each node, (n_masses, 1)
-#         tensions (np.ndarray): A sparse (n_masses, n_masses, 1) array defining the connectivity and the
-#             spring tensions between nodes
-#         damping (float): energy dissipation rate
-#         n_samples (int): the number of time steps to run the simulation
-#         mixer (np.ndarray): The mix over recordings from each node, an (n_masses, 1) tensor,
-#             ideally softmax-normalized
-#         constrained_mask (np.ndarray): a binary/boolean mask describing which nodes are fixed
-#             and immovable
-#         forces (Dict[int, np.ndarray]): a sparse representation of where and when forces are applied to
-#             the structure, a dict mapping sample -> (n_masses, dim)
-#     """
-#
-#     # TODO: Check to ensure that tensions is symmetrical, or
-#     # accept only the upper triangular of the tensions matrix
-#     connectivity_mask = tensions > 0
-#
-#
-#     # compute pair-wise distances between each node.  this will
-#     # be used to update forces.  This is considered to be the
-#     # resting length of each spring.  This is a fully-connected
-#     # graph, but only the positions with non-zero tensions
-#     # entries are actually connected
-#     # TODO: consider using scipy.spatial.distance.pdist
-#     dist = np.linalg.norm(
-#         node_positions[None, :] - node_positions[:, None],
-#         axis=-1,
-#         keepdims=True)
-#
-#     recording: np.ndarray = np.zeros(n_samples)
-#
-#     # first derivative of node displacement
-#     velocities = np.zeros_like(node_positions)
-#
-#     # second derivative of node displacement
-#     accelerations = np.zeros_like(node_positions)
-#
-#     for t in range(n_samples):
-#
-#         # determine if any forces were applied at this time step
-#         # then, update the forces acting upon each mass
-#         # update the positions of each node based on the accumulated forces
-#         # finally record from a single dimension of each node's position
-#         f = forces.get(t, None)
-#         if f is not None:
-#             accelerations += f
-#
-#
-#         # compute current pair-wise distances
-#         current_dist = np.linalg.norm(
-#             node_positions[None, :] - node_positions[:, None],
-#             axis=-1,
-#             keepdims=True)
-#
-#         # determine how far each node is from its resting length
-#         disp = dist - current_dist
-#
-#         # we only care about nodes that are actually connected
-#         disp *= connectivity_mask
-#
-#         # the acceleration of each node will be determined by the displacement
-#         # of the spring (symmetrical for both connected nodes) * the mass on the
-#         # other end of the spring (not symmetrical)
-#         accelerations += (tensions * disp) @ (1 / masses)
-#
-#
-#         # update velocities and apply damping
-#         velocities += accelerations
-#         velocities *= damping
-#
-#         # update positions for nodes that are not constrained/fixed
-#         node_positions += velocities * constrained_mask
-#
-#         # record the displacement of each node, from its original
-#         # position, weighted by mixer
-#         recording[t] = mixer @ current_dist
-#
-#
-#     return recording
+def spring_mesh(
+        node_positions: np.ndarray,
+        masses: np.ndarray,
+        tensions: np.ndarray,
+        damping: float,
+        n_samples: int,
+        mixer: np.ndarray,
+        constrained_mask: np.ndarray,
+        forces: Dict[int, np.ndarray]) -> np.ndarray:
+
+    """
+    We assume that the node positions passed in represent the resting length
+    of the springs connecting the nodes
+
+    Args:
+        node_positions (np.ndarray): The N-dimensional starting positions of each
+            mass, (n_masses, dim)
+        masses (np.ndarray): The mass of each node, (n_masses, 1)
+        tensions (np.ndarray): A sparse (n_masses, n_masses, 1) array defining the connectivity and the
+            spring tensions between nodes
+        damping (float): energy dissipation rate
+        n_samples (int): the number of time steps to run the simulation
+        mixer (np.ndarray): The mix over recordings from each node, an (n_masses, 1) tensor,
+            ideally softmax-normalized
+        constrained_mask (np.ndarray): a binary/boolean mask describing which nodes are fixed
+            and immovable.  Positions will be updated via current + (change * constrained), so
+            constrained nodes should be equal to 0
+        forces (Dict[int, np.ndarray]): a sparse representation of where and when forces are applied to
+            the structure, a dict mapping sample -> (n_masses, dim)
+    """
+
+    # check that the tension matrix is symmetric, since a single spring with
+    # a fixed tension can connect two nodes
+    if not np.all(tensions == tensions.T):
+        raise ValueError('tensions must be a symmetric matrix')
+
+    orig_positions = node_positions.copy()
+
+    connectivity_mask = tensions > 0
+
+    # compute vectors representing the resting states of the springs
+    resting = node_positions[None, :] - node_positions[:, None]
+
+    # initialize a vector to hold recorded samples from the simulation
+    recording: np.ndarray = np.zeros(n_samples)
+
+    # first derivative of node displacement
+    velocities = np.zeros_like(node_positions)
+
+    accelerations = np.zeros_like(node_positions)
+
+    for t in range(n_samples):
+
+        # determine if any forces were applied at this time step
+        # then, update the forces acting upon each mass
+        # update the positions of each node based on the accumulated forces
+        # finally record from a single dimension of each node's position
+        f = forces.get(t, None)
+        if f is not None:
+            accelerations += f
+
+        """
+        def update_forces(self):
+            # compute for m1
+            current = self.m1.position - self.m2.position
+            displacement = self.m1_resting - current
+            self.m1.apply_force(displacement * self.tension)
+    
+            # compute for m2
+            current = self.m2.position - self.m1.position
+            displacement = self.m2_resting - current
+            self.m2.apply_force(displacement * self.tension)
+        """
+
+        current = node_positions[None, :] - node_positions[:, None]
+        d1 = resting - current
+        d2 = -resting + current
+
+        accelerations += (d1 @ np.triu(tensions * connectivity_mask)) / masses
+        accelerations += (d2 @ np.tril(tensions * connectivity_mask)) / masses
+
+        # update velocities and apply damping
+        velocities += accelerations
+        velocities *= damping
+
+        # update positions for nodes that are not constrained/fixed
+        node_positions += velocities * constrained_mask
+
+        # record the displacement of each node, from its original
+        # position, weighted by mixer
+        disp = orig_positions - node_positions
+        recording[t] = mixer @ disp
+
+        # clear all the accumulated forces
+        accelerations[:] = 0
+
+
+    return recording
 
 
 @jit(nopython=True, nogil=True)
@@ -582,12 +639,12 @@ def string_simulation():
     
 if __name__ == '__main__':
 
-    # s1 = class_based_spring_mesh(n_samples=2**16, record_all=True)
-    # s2 = class_based_spring_mesh(n_samples=2**16, record_all=False)
+    s1 = class_based_spring_mesh(n_samples=2**16, record_all=True)
+    s2 = class_based_spring_mesh(n_samples=2**16, record_all=False)
 
-    # samples = np.concatenate([s1, s2], axis=-1)
+    samples = np.concatenate([s1, s2], axis=-1)
 
-    samples = class_based_plate(n_samples=2**15, record_all=False)
+    # samples = class_based_plate(n_samples=2**15, record_all=False)
     print(samples.shape)
     evaluate(samples)
 
