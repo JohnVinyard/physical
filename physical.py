@@ -231,14 +231,12 @@ class SpringMesh(object):
         for mass in self.all_masses:
             mass.clear()
 
-
-def class_based_plate(n_samples: int, record_all: bool = False):
+def build_plate(width: int) -> SpringMesh:
     mass = 2
-    tension = 0.0005
+    tension = 0.005
     damping = 0.9998
 
-
-    width = 8
+    # width = 8
 
     boundaries = {0, width - 1}
     masses: List[List[Union[None, Mass]]] = [
@@ -246,16 +244,14 @@ def class_based_plate(n_samples: int, record_all: bool = False):
         for _ in range(width)
     ]
 
-
     directions = np.array([
         [-1, -1], [-1, 0], [-1, 1],
-        [0, -1],           [0,  1],
-        [1, -1],  [1, 0],  [1, 1],
+        [0, -1], [0, 1],
+        [1, -1], [1, 0], [1, 1],
     ], dtype=np.int32)
 
     for x in range(width):
         for y in range(width):
-
             m = Mass(
                 f'{x},{y}',
                 np.array([x, y]),
@@ -280,8 +276,62 @@ def class_based_plate(n_samples: int, record_all: bool = False):
                 except IndexError:
                     pass
 
-
     mesh = SpringMesh(springs)
+    return mesh
+
+def class_based_plate(n_samples: int, record_all: bool = False):
+    # mass = 2
+    # tension = 0.0005
+    # damping = 0.9998
+    #
+    #
+    # width = 8
+    #
+    # boundaries = {0, width - 1}
+    # masses: List[List[Union[None, Mass]]] = [
+    #     [None for _ in range(width)]
+    #     for _ in range(width)
+    # ]
+    #
+    #
+    # directions = np.array([
+    #     [-1, -1], [-1, 0], [-1, 1],
+    #     [0, -1],           [0,  1],
+    #     [1, -1],  [1, 0],  [1, 1],
+    # ], dtype=np.int32)
+    #
+    # for x in range(width):
+    #     for y in range(width):
+    #
+    #         m = Mass(
+    #             f'{x},{y}',
+    #             np.array([x, y]),
+    #             mass,
+    #             damping,
+    #             fixed=x in boundaries or y in boundaries)
+    #
+    #         masses[x][y] = m
+    #
+    # springs: List[Spring] = []
+    #
+    # for x in range(width):
+    #     for y in range(width):
+    #         current = masses[x][y]
+    #         for direction in directions:
+    #             nx, ny = current.position + direction
+    #             nx, ny = int(nx), int(ny)
+    #             try:
+    #                 neighbor = masses[nx][ny]
+    #                 s = Spring(current, neighbor, tension)
+    #                 springs.append(s)
+    #             except IndexError:
+    #                 pass
+    #
+    #
+    # mesh = SpringMesh(springs)
+
+    width = 8
+    mesh = build_plate(width=width)
 
     force_target = [2, 2]
     recording_target = [3, 3]
@@ -298,7 +348,7 @@ def class_based_plate(n_samples: int, record_all: bool = False):
         f = forces.get(i, None)
         if f is not None:
             print(f'applying force {f} at time step {i}')
-            masses[force_target[0]][force_target[1]].apply_force(f)
+            mesh.masses[force_target[0]][force_target[1]].apply_force(f)
 
 
         # apply the forces exerted by the springs
@@ -492,7 +542,10 @@ def optimized_string_simulation(mesh: SpringMesh, force_target: int, n_samples: 
     compiled = mesh.compile()
     force_template = compiled.force_template()
 
-    force_template[force_target, :] = np.array([0.1, 0.1, 0])
+    if force_template.shape[-1] == 3:
+        force_template[force_target, :] = np.array([0.1, 0.1, 0])
+    elif force_template.shape[-1] == 2:
+        force_template[force_target, :] = np.array([0.1, 0.1])
 
     forces = {
         2048:  force_template,
@@ -531,17 +584,26 @@ def compare_class_and_optimized_results(n_samples: int=2**15, samplerate: int = 
     print(f'optimized spring mesh took {stop - start:.2f} seconds to generate {audio_seconds:.2f} seconds of audio')
     evaluate(b)
 
-    # start = time()
-    # c = optimized_string_simulation(
-    #     mesh, force_target=force_target, n_samples=n_samples)
-    # stop = time()
-    # print(f'jitted spring mesh took {stop - start:.2f} seconds to generate {audio_seconds:.2f} seconds of audio')
-    # evaluate(c)
+
+def check_optimized_plate_sim(
+        n_samples: int=2**15,
+        width: int = 8,
+        force_target:int = 7,
+        samplerate: int = 22050):
+
+    audio_seconds = n_samples / samplerate
+    mesh = build_plate(width)
+    start = time()
+    samples = optimized_string_simulation(mesh, force_target=force_target, n_samples=n_samples)
+    stop = time()
+    print(f'optimized spring mesh took {stop - start:.2f} seconds to generate {audio_seconds:.2f} seconds of audio')
+    evaluate(samples)
 
     
 if __name__ == '__main__':
 
-    compare_class_and_optimized_results(n_samples=2**15)
+    # compare_class_and_optimized_results(n_samples=2**15)
+    check_optimized_plate_sim(n_samples=2**16, width=16, force_target=9)
 
     # s1 = class_based_spring_mesh(n_samples=2**16, record_all=True)
     # s2 = class_based_spring_mesh(n_samples=2**16, record_all=False)
