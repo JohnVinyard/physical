@@ -7,6 +7,7 @@ from matplotlib import pyplot as plt
 from subprocess import Popen, PIPE
 from scipy.signal import stft
 from time import time
+import torch
 
 
 # TODO: It might be nice to move this into zounds
@@ -32,7 +33,7 @@ def listen_to_sound(
         input('Next')
     
 
-def evaluate(recording: np.ndarray):
+def evaluate(recording: np.ndarray, listen: bool = True):
     """
     Look at time and frequency domain, then listen
     """
@@ -44,9 +45,10 @@ def evaluate(recording: np.ndarray):
     spec = np.log(spec + 1e-3)
     plt.matshow(spec)
     plt.show()
-    
-    recording = recording / (recording.max() + 1e-3)
-    listen_to_sound(recording, True)
+
+    if listen:
+        recording = recording / (recording.max() + 1e-3)
+        listen_to_sound(recording, True)
 
 
 
@@ -151,6 +153,25 @@ class CompiledSpringMesh:
     def force_template(self):
         return np.zeros_like(self.positions)
 
+    def full_force_template(self, n_samples: int) -> np.ndarray:
+        return np.zeros((n_samples, *self.positions.shape))
+
+    def torch_full_force_template(self, n_samples: int, device = None) -> torch.Tensor:
+        x = self.full_force_template(n_samples)
+        x = torch.from_numpy(x).float().to(device)
+        return x
+
+    def positions_tensor(self, device=None):
+        return torch.from_numpy(self.positions).float().to(device)
+
+    def masses_tensor(self, device=None):
+        return torch.from_numpy(self.masses).float().to(device)
+
+    def tensions_tensor(self, device=None):
+        return torch.from_numpy(self.tensions).float().to(device)
+
+    def constrained_mask_tensor(self, device=None):
+        return torch.from_numpy(self.constrained_mask).float().to(device)
 
 
 class SpringMesh(object):
@@ -205,6 +226,9 @@ class SpringMesh(object):
         A mixing matrix that records from each node at the same amplitude
         """
         return np.ones((len(self.all_masses),))
+
+    def flat_tensor_mixer(self, device=None):
+        return torch.from_numpy(self.flat_mixer).float().to(device)
 
     def update_forces(self):
         """
@@ -439,6 +463,88 @@ def class_based_spring_mesh(
 
     return samples
 
+
+def torch_spring_mesh(
+        node_positions: torch.Tensor,
+        masses: torch.Tensor,
+        tensions: torch.Tensor,
+        damping: float,
+        n_samples: int,
+        mixer: torch.Tensor,
+        constrained_mask: torch.Tensor,
+        forces: torch.Tensor
+) -> torch.Tensor:
+    """
+    forces is (n_samples, n_nodes, dim) representing any outside forces applied to each
+    node at each timestep
+    """
+    if not torch.all(tensions == tensions.T):
+        raise ValueError('tensions must be a symmetric matrix')
+
+
+    orig_positions = node_positions.clone()
+
+    connectivity_mask: torch.Tensor = tensions > 0
+
+    # compute vectors representing the resting states of the springs
+    resting = node_positions[None, :] - node_positions[:, None]
+
+    # initialize a vector to hold recorded samples from the simulation
+    recording: torch.Tensor = torch.zeros(n_samples)
+
+    # first derivative of node displacement
+    velocities = torch.zeros_like(node_positions)
+
+    accelerations = torch.zeros_like(node_positions)
+
+    for t in range(n_samples):
+
+        # determine if any forces were applied at this time step
+        # then, update the forces acting upon each mass
+        # update the positions of each node based on the accumulated forces
+        # finally record from a single dimension of each node's position
+        # f = forces.get(t, None)
+        # if f is not None:
+        #     print(f'applying force {f} at time step {t}')
+        #     accelerations += f
+        print(accelerations.shape, forces[t].shape)
+
+        accelerations += forces[t]
+
+        current = node_positions[None, :] - node_positions[:, None]
+        d2 = resting - current
+        d1 = -resting + current
+
+        # update m1
+        x = (d1 * torch.triu(tensions[..., None] * connectivity_mask[..., None])).sum(axis=0)
+        accelerations += x / masses[..., None]
+
+        # update m2
+        x = (d2 * torch.tril(tensions[..., None] * connectivity_mask[..., None])).sum(axis=0)
+        accelerations += x / masses[..., None]
+
+        # update velocities and apply damping
+        velocities += accelerations
+
+        # update positions for nodes that are not constrained/fixed
+        node_positions += velocities * constrained_mask[..., None]
+
+        # record the displacement of each node, from its original
+        # position, weighted by mixer
+        # TODO: we've already done this above, reuse the node displacement
+        # calculation
+        disp = node_positions - orig_positions
+        mixed = mixer @ disp
+        recording[t] = mixed[0]
+
+        # clear all the accumulated forces
+        velocities *= damping
+
+        accelerations[:] = 0
+
+    return recording
+
+
 def spring_mesh(
         node_positions: np.ndarray,
         masses: np.ndarray,
@@ -537,6 +643,32 @@ def spring_mesh(
     return recording
 
 
+def torch_simulation(mesh: SpringMesh, n_samples: int = 2 **15, samplerate: int = 22050):
+    compiled = mesh.compile()
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    force_template = compiled.torch_full_force_template(n_samples=n_samples, device=device)
+
+    force_template[10, :] = torch.from_numpy(np.array([0.1, 0.1, 0.1])).float().to(device)
+
+    start = time()
+
+    samples = torch_spring_mesh(
+        compiled.positions_tensor(device=device),
+        compiled.masses_tensor(device=device),
+        compiled.tensions_tensor(device=device),
+        damping=0.9998,
+        n_samples=n_samples,
+        mixer=mesh.flat_tensor_mixer(device=device),
+        constrained_mask=compiled.constrained_mask_tensor(device=device),
+        forces=force_template,
+    )
+    end = time()
+    audio_seconds = n_samples / samplerate
+    print(f'torch implementation took {end - start:.3f} seconds to generate {audio_seconds:.3f} seconds of audio')
+
+    samples = samples.data.cpu().numpy()
+    return samples
+
 
 def optimized_string_simulation(mesh: SpringMesh, force_target: int, n_samples: int = 2**15) -> np.ndarray:
     compiled = mesh.compile()
@@ -603,21 +735,12 @@ def check_optimized_plate_sim(
 if __name__ == '__main__':
 
     # compare_class_and_optimized_results(n_samples=2**15)
-    check_optimized_plate_sim(n_samples=2**16, width=16, force_target=9)
+    # check_optimized_plate_sim(n_samples=2**16, width=16, force_target=9)
 
-    # s1 = class_based_spring_mesh(n_samples=2**16, record_all=True)
-    # s2 = class_based_spring_mesh(n_samples=2**16, record_all=False)
+    mesh = build_string()
+    samples = torch_simulation(mesh, n_samples=1024, samplerate=22050)
+    evaluate(samples, listen=False)
 
-    # samples = np.concatenate([s1, s2], axis=-1)
 
-    # samples = class_based_plate(n_samples=2**15, record_all=False)
-    # print(samples.shape)
-    # evaluate(samples)
-
-    # Using numba's @jit is slower the first time, but
-    # more than twice as fast on subsequent runs
-    # string_simulation()
-    # string_simulation()
-    # string_simulation()
     
     
