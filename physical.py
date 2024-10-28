@@ -404,7 +404,7 @@ def build_string():
     mass = 3.5
     tension = 0.5
     damping = 0.9998
-    n_masses = 50
+    n_masses = 10
 
     x_pos = np.linspace(0, 1, num=n_masses)
     positions = np.zeros((n_masses, 3))
@@ -507,21 +507,21 @@ def torch_spring_mesh(
         # if f is not None:
         #     print(f'applying force {f} at time step {t}')
         #     accelerations += f
-        print(accelerations.shape, forces[t].shape)
 
         accelerations += forces[t]
+
 
         current = node_positions[None, :] - node_positions[:, None]
         d2 = resting - current
         d1 = -resting + current
 
         # update m1
-        x = (d1 * torch.triu(tensions[..., None] * connectivity_mask[..., None])).sum(axis=0)
-        accelerations += x / masses[..., None]
+        x = (d1 * torch.triu(tensions[..., None] * connectivity_mask[..., None])).sum(dim=0)
+        accelerations += (x / masses[..., None])
 
         # update m2
-        x = (d2 * torch.tril(tensions[..., None] * connectivity_mask[..., None])).sum(axis=0)
-        accelerations += x / masses[..., None]
+        x = (d2 * torch.tril(tensions[..., None] * connectivity_mask[..., None])).sum(dim=0)
+        accelerations += (x / masses[..., None])
 
         # update velocities and apply damping
         velocities += accelerations
@@ -539,7 +539,6 @@ def torch_spring_mesh(
 
         # clear all the accumulated forces
         velocities *= damping
-
         accelerations[:] = 0
 
     return recording
@@ -650,6 +649,7 @@ def torch_simulation(mesh: SpringMesh, n_samples: int = 2 **15, samplerate: int 
 
     force_template[10, :] = torch.from_numpy(np.array([0.1, 0.1, 0.1])).float().to(device)
 
+    constrained_mask = compiled.constrained_mask_tensor(device=device)
     start = time()
 
     samples = torch_spring_mesh(
@@ -659,7 +659,7 @@ def torch_simulation(mesh: SpringMesh, n_samples: int = 2 **15, samplerate: int 
         damping=0.9998,
         n_samples=n_samples,
         mixer=mesh.flat_tensor_mixer(device=device),
-        constrained_mask=compiled.constrained_mask_tensor(device=device),
+        constrained_mask=constrained_mask,
         forces=force_template,
     )
     end = time()
@@ -738,7 +738,7 @@ if __name__ == '__main__':
     # check_optimized_plate_sim(n_samples=2**16, width=16, force_target=9)
 
     mesh = build_string()
-    samples = torch_simulation(mesh, n_samples=1024, samplerate=22050)
+    samples = torch_simulation(mesh, n_samples=2**15, samplerate=22050)
     evaluate(samples, listen=False)
 
 
