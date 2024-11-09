@@ -179,9 +179,14 @@ class SpringMesh(object):
         super().__init__()
         self.springs = springs
 
-        self.all_masses = set()
+        tmp_all_masses = dict()
+
         for spring in springs:
-            self.all_masses.update(spring.masses())
+            for mass in spring.masses():
+                if mass not in tmp_all_masses:
+                    tmp_all_masses[mass] = mass
+
+        self.all_masses = tmp_all_masses.values()
 
     def compile(self) -> CompiledSpringMesh:
         return CompiledSpringMesh(
@@ -255,156 +260,156 @@ class SpringMesh(object):
         for mass in self.all_masses:
             mass.clear()
 
-def build_plate(width: int) -> SpringMesh:
-    mass = 2
-    tension = 0.005
-    damping = 0.9998
+# def build_plate(width: int) -> SpringMesh:
+#     mass = 2
+#     tension = 0.005
+#     damping = 0.9998
+#
+#     # width = 8
+#
+#     boundaries = {0, width - 1}
+#     masses: List[List[Union[None, Mass]]] = [
+#         [None for _ in range(width)]
+#         for _ in range(width)
+#     ]
+#
+#     directions = np.array([
+#         [-1, -1], [-1, 0], [-1, 1],
+#         [0, -1], [0, 1],
+#         [1, -1], [1, 0], [1, 1],
+#     ], dtype=np.int32)
+#
+#     for x in range(width):
+#         for y in range(width):
+#             m = Mass(
+#                 f'{x},{y}',
+#                 np.array([x, y]),
+#                 mass,
+#                 damping,
+#                 fixed=x in boundaries or y in boundaries)
+#
+#             masses[x][y] = m
+#
+#     springs: List[Spring] = []
+#
+#     for x in range(width):
+#         for y in range(width):
+#             current = masses[x][y]
+#             for direction in directions:
+#                 nx, ny = current.position + direction
+#                 nx, ny = int(nx), int(ny)
+#                 try:
+#                     neighbor = masses[nx][ny]
+#                     s = Spring(current, neighbor, tension)
+#                     springs.append(s)
+#                 except IndexError:
+#                     pass
+#
+#     mesh = SpringMesh(springs)
+#     return mesh
 
-    # width = 8
-
-    boundaries = {0, width - 1}
-    masses: List[List[Union[None, Mass]]] = [
-        [None for _ in range(width)]
-        for _ in range(width)
-    ]
-
-    directions = np.array([
-        [-1, -1], [-1, 0], [-1, 1],
-        [0, -1], [0, 1],
-        [1, -1], [1, 0], [1, 1],
-    ], dtype=np.int32)
-
-    for x in range(width):
-        for y in range(width):
-            m = Mass(
-                f'{x},{y}',
-                np.array([x, y]),
-                mass,
-                damping,
-                fixed=x in boundaries or y in boundaries)
-
-            masses[x][y] = m
-
-    springs: List[Spring] = []
-
-    for x in range(width):
-        for y in range(width):
-            current = masses[x][y]
-            for direction in directions:
-                nx, ny = current.position + direction
-                nx, ny = int(nx), int(ny)
-                try:
-                    neighbor = masses[nx][ny]
-                    s = Spring(current, neighbor, tension)
-                    springs.append(s)
-                except IndexError:
-                    pass
-
-    mesh = SpringMesh(springs)
-    return mesh
-
-def class_based_plate(n_samples: int, record_all: bool = False):
-    # mass = 2
-    # tension = 0.0005
-    # damping = 0.9998
-    #
-    #
-    # width = 8
-    #
-    # boundaries = {0, width - 1}
-    # masses: List[List[Union[None, Mass]]] = [
-    #     [None for _ in range(width)]
-    #     for _ in range(width)
-    # ]
-    #
-    #
-    # directions = np.array([
-    #     [-1, -1], [-1, 0], [-1, 1],
-    #     [0, -1],           [0,  1],
-    #     [1, -1],  [1, 0],  [1, 1],
-    # ], dtype=np.int32)
-    #
-    # for x in range(width):
-    #     for y in range(width):
-    #
-    #         m = Mass(
-    #             f'{x},{y}',
-    #             np.array([x, y]),
-    #             mass,
-    #             damping,
-    #             fixed=x in boundaries or y in boundaries)
-    #
-    #         masses[x][y] = m
-    #
-    # springs: List[Spring] = []
-    #
-    # for x in range(width):
-    #     for y in range(width):
-    #         current = masses[x][y]
-    #         for direction in directions:
-    #             nx, ny = current.position + direction
-    #             nx, ny = int(nx), int(ny)
-    #             try:
-    #                 neighbor = masses[nx][ny]
-    #                 s = Spring(current, neighbor, tension)
-    #                 springs.append(s)
-    #             except IndexError:
-    #                 pass
-    #
-    #
-    # mesh = SpringMesh(springs)
-
-    width = 8
-    mesh = build_plate(width=width)
-
-    force_target = [2, 2]
-    recording_target = [3, 3]
-
-    forces = {
-        2048: np.array([10, 10])
-    }
-
-
-    samples = np.zeros((n_samples,))
-
-    for i in range(n_samples):
-
-        f = forces.get(i, None)
-        if f is not None:
-            print(f'applying force {f} at time step {i}')
-            mesh.masses[force_target[0]][force_target[1]].apply_force(f)
-
-
-        # apply the forces exerted by the springs
-        mesh.update_forces()
-
-        # update velocities based on the accumulated forces
-        mesh.update_velocities()
-
-        # update the positions based upon velocity
-        mesh.update_positions()
-
-        # clear the accumulated forces from this iteration and apply
-        # damping via friction to the velocity
-        mesh.clear()
-
-        if record_all:
-            for x in range(width):
-                for y in range(width):
-                    samples[i] += masses[x][y].diff()[0]
-
-        else:
-            samples[i] = masses[recording_target[0]][recording_target[1]].diff()[0]
-
-
-    return samples
+# def class_based_plate(n_samples: int, record_all: bool = False):
+#     # mass = 2
+#     # tension = 0.0005
+#     # damping = 0.9998
+#     #
+#     #
+#     # width = 8
+#     #
+#     # boundaries = {0, width - 1}
+#     # masses: List[List[Union[None, Mass]]] = [
+#     #     [None for _ in range(width)]
+#     #     for _ in range(width)
+#     # ]
+#     #
+#     #
+#     # directions = np.array([
+#     #     [-1, -1], [-1, 0], [-1, 1],
+#     #     [0, -1],           [0,  1],
+#     #     [1, -1],  [1, 0],  [1, 1],
+#     # ], dtype=np.int32)
+#     #
+#     # for x in range(width):
+#     #     for y in range(width):
+#     #
+#     #         m = Mass(
+#     #             f'{x},{y}',
+#     #             np.array([x, y]),
+#     #             mass,
+#     #             damping,
+#     #             fixed=x in boundaries or y in boundaries)
+#     #
+#     #         masses[x][y] = m
+#     #
+#     # springs: List[Spring] = []
+#     #
+#     # for x in range(width):
+#     #     for y in range(width):
+#     #         current = masses[x][y]
+#     #         for direction in directions:
+#     #             nx, ny = current.position + direction
+#     #             nx, ny = int(nx), int(ny)
+#     #             try:
+#     #                 neighbor = masses[nx][ny]
+#     #                 s = Spring(current, neighbor, tension)
+#     #                 springs.append(s)
+#     #             except IndexError:
+#     #                 pass
+#     #
+#     #
+#     # mesh = SpringMesh(springs)
+#
+#     width = 8
+#     mesh = build_plate(width=width)
+#
+#     force_target = [2, 2]
+#     recording_target = [3, 3]
+#
+#     forces = {
+#         2048: np.array([10, 10])
+#     }
+#
+#
+#     samples = np.zeros((n_samples,))
+#
+#     for i in range(n_samples):
+#
+#         f = forces.get(i, None)
+#         if f is not None:
+#             print(f'applying force {f} at time step {i}')
+#             mesh.masses[force_target[0]][force_target[1]].apply_force(f)
+#
+#
+#         # apply the forces exerted by the springs
+#         mesh.update_forces()
+#
+#         # update velocities based on the accumulated forces
+#         mesh.update_velocities()
+#
+#         # update the positions based upon velocity
+#         mesh.update_positions()
+#
+#         # clear the accumulated forces from this iteration and apply
+#         # damping via friction to the velocity
+#         mesh.clear()
+#
+#         if record_all:
+#             for x in range(width):
+#                 for y in range(width):
+#                     samples[i] += masses[x][y].diff()[0]
+#
+#         else:
+#             samples[i] = masses[recording_target[0]][recording_target[1]].diff()[0]
+#
+#
+#     return samples
 
 
 def build_string():
-    mass = 3.5
-    tension = 0.5
+    mass = 5
+    tension = 0.2
     damping = 0.9998
-    n_masses = 10
+    n_masses = 20
 
     x_pos = np.linspace(0, 1, num=n_masses)
     positions = np.zeros((n_masses, 3))
@@ -463,7 +468,6 @@ def class_based_spring_mesh(
 
     return samples
 
-
 def torch_spring_mesh(
         node_positions: torch.Tensor,
         masses: torch.Tensor,
@@ -486,6 +490,7 @@ def torch_spring_mesh(
 
     connectivity_mask: torch.Tensor = tensions > 0
 
+
     # compute vectors representing the resting states of the springs
     resting = node_positions[None, :] - node_positions[:, None]
 
@@ -499,15 +504,6 @@ def torch_spring_mesh(
 
     for t in range(n_samples):
 
-        # determine if any forces were applied at this time step
-        # then, update the forces acting upon each mass
-        # update the positions of each node based on the accumulated forces
-        # finally record from a single dimension of each node's position
-        # f = forces.get(t, None)
-        # if f is not None:
-        #     print(f'applying force {f} at time step {t}')
-        #     accelerations += f
-
         accelerations += forces[t]
 
 
@@ -517,11 +513,11 @@ def torch_spring_mesh(
 
         # update m1
         x = (d1 * torch.triu(tensions[..., None] * connectivity_mask[..., None])).sum(dim=0)
-        accelerations += (x / masses[..., None])
+        accelerations += x / masses[..., None]
 
         # update m2
         x = (d2 * torch.tril(tensions[..., None] * connectivity_mask[..., None])).sum(dim=0)
-        accelerations += (x / masses[..., None])
+        accelerations += x / masses[..., None]
 
         # update velocities and apply damping
         velocities += accelerations
@@ -575,6 +571,7 @@ def spring_mesh(
             the structure, a dict mapping sample -> (n_masses, dim)
     """
 
+
     # check that the tension matrix is symmetric, since a single spring with
     # a fixed tension can connect two nodes
     if not np.all(tensions == tensions.T):
@@ -603,7 +600,6 @@ def spring_mesh(
         # finally record from a single dimension of each node's position
         f = forces.get(t, None)
         if f is not None:
-            print(f'applying force {f} at time step {t}')
             accelerations += f
 
         current = node_positions[None, :] - node_positions[:, None]
@@ -642,12 +638,16 @@ def spring_mesh(
     return recording
 
 
-def torch_simulation(mesh: SpringMesh, n_samples: int = 2 **15, samplerate: int = 22050):
+def torch_simulation(
+        mesh: SpringMesh,
+        n_samples: int = 2 **15,
+        samplerate: int = 22050):
+
     compiled = mesh.compile()
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cpu')
     force_template = compiled.torch_full_force_template(n_samples=n_samples, device=device)
 
-    force_template[10, :] = torch.from_numpy(np.array([0.1, 0.1, 0.1])).float().to(device)
+    force_template[16, 3, :] = torch.from_numpy(np.array([0.1, 0.1, 0])).float().to(device)
 
     constrained_mask = compiled.constrained_mask_tensor(device=device)
     start = time()
@@ -670,7 +670,12 @@ def torch_simulation(mesh: SpringMesh, n_samples: int = 2 **15, samplerate: int 
     return samples
 
 
-def optimized_string_simulation(mesh: SpringMesh, force_target: int, n_samples: int = 2**15) -> np.ndarray:
+def optimized_string_simulation(
+        mesh: SpringMesh,
+        force_target: int,
+        n_samples: int = 2**15,
+        samplerate: int = 22050) -> np.ndarray:
+
     compiled = mesh.compile()
     force_template = compiled.force_template()
 
@@ -680,8 +685,10 @@ def optimized_string_simulation(mesh: SpringMesh, force_target: int, n_samples: 
         force_template[force_target, :] = np.array([0.1, 0.1])
 
     forces = {
-        2048:  force_template,
+        16:  force_template,
     }
+
+    start = time()
 
     samples = spring_mesh(
         compiled.positions,
@@ -693,53 +700,66 @@ def optimized_string_simulation(mesh: SpringMesh, force_target: int, n_samples: 
         constrained_mask=compiled.constrained_mask,
         forces=forces
     )
+    end = time()
+    audio_seconds = n_samples / samplerate
+    print(f'numpy implementation took {end - start:.3f} seconds to generate {audio_seconds:.3f} seconds of audio')
 
     return samples
 
-def compare_class_and_optimized_results(n_samples: int=2**15, samplerate: int = 22050):
-    mesh = build_string()
-    force_target = 3
+# def compare_class_and_optimized_results(n_samples: int=2**15, samplerate: int = 22050):
+#     mesh = build_string()
+#     force_target = 3
+#
+#     audio_seconds = n_samples / samplerate
+#
+#     start = time()
+#     a = class_based_spring_mesh(
+#         mesh, force_target=force_target, n_samples=n_samples)
+#     stop = time()
+#     print(f'class-based spring mesh took {stop - start:.2f} seconds to generate {audio_seconds:.2f} seconds of audio')
+#     evaluate(a)
+#
+#     start = time()
+#     b = optimized_string_simulation(
+#         mesh, force_target=force_target, n_samples=n_samples)
+#     stop = time()
+#     print(f'optimized spring mesh took {stop - start:.2f} seconds to generate {audio_seconds:.2f} seconds of audio')
+#     evaluate(b)
+#
+#
+# def check_optimized_plate_sim(
+#         n_samples: int=2**15,
+#         width: int = 8,
+#         force_target:int = 7,
+#         samplerate: int = 22050):
+#
+#     audio_seconds = n_samples / samplerate
+#     mesh = build_plate(width)
+#     start = time()
+#     samples = optimized_string_simulation(mesh, force_target=force_target, n_samples=n_samples)
+#     stop = time()
+#     print(f'optimized spring mesh took {stop - start:.2f} seconds to generate {audio_seconds:.2f} seconds of audio')
+#     evaluate(samples)
 
-    audio_seconds = n_samples / samplerate
-
-    start = time()
-    a = class_based_spring_mesh(
-        mesh, force_target=force_target, n_samples=n_samples)
-    stop = time()
-    print(f'class-based spring mesh took {stop - start:.2f} seconds to generate {audio_seconds:.2f} seconds of audio')
-    evaluate(a)
-
-    start = time()
-    b = optimized_string_simulation(
-        mesh, force_target=force_target, n_samples=n_samples)
-    stop = time()
-    print(f'optimized spring mesh took {stop - start:.2f} seconds to generate {audio_seconds:.2f} seconds of audio')
-    evaluate(b)
 
 
-def check_optimized_plate_sim(
-        n_samples: int=2**15,
-        width: int = 8,
-        force_target:int = 7,
-        samplerate: int = 22050):
-
-    audio_seconds = n_samples / samplerate
-    mesh = build_plate(width)
-    start = time()
-    samples = optimized_string_simulation(mesh, force_target=force_target, n_samples=n_samples)
-    stop = time()
-    print(f'optimized spring mesh took {stop - start:.2f} seconds to generate {audio_seconds:.2f} seconds of audio')
-    evaluate(samples)
-
-    
-if __name__ == '__main__':
-
+def compare_numpy_and_torch_implementations():
     # compare_class_and_optimized_results(n_samples=2**15)
-    # check_optimized_plate_sim(n_samples=2**16, width=16, force_target=9)
 
+    n_samples = 2 ** 15
+    # check_optimized_plate_sim(n_samples=n_samples, width=16, force_target=9)
     mesh = build_string()
-    samples = torch_simulation(mesh, n_samples=2**15, samplerate=22050)
-    evaluate(samples, listen=False)
+    samples = optimized_string_simulation(mesh, force_target=3, n_samples=n_samples)
+    evaluate(samples, listen=True)
+
+    # print('=======================')
+
+    samples = torch_simulation(mesh, n_samples=n_samples, samplerate=22050)
+    evaluate(samples, listen=True)
+
+if __name__ == '__main__':
+    compare_numpy_and_torch_implementations()
+
 
 
     
