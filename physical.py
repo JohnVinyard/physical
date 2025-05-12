@@ -600,6 +600,13 @@ def spring_mesh(
 
     accelerations = np.zeros_like(node_positions)
 
+    ones = np.ones((n_masses, n_masses, 1))
+    upper_mask = np.triu(ones)
+    lower_mask = np.tril(ones)
+
+    connectivity = tensions[..., None] * connectivity_mask[..., None]
+    upper_mask = connectivity * upper_mask
+    lower_mask = connectivity * lower_mask
 
     for t in range(n_samples):
 
@@ -617,11 +624,15 @@ def spring_mesh(
         d1 = -resting + current
 
         # update m1
-        x = (d1 * np.triu(tensions[..., None] * connectivity_mask[..., None])).sum(axis=0)
+        # intermediate = tensions[..., None] * connectivity_mask[..., None]
+        # intermediate = connectivity * upper_mask
+        x = (d1 * upper_mask).sum(axis=0)
         accelerations += x / masses[..., None]
 
         # update m2
-        x = (d2 * np.tril(tensions[..., None] * connectivity_mask[..., None])).sum(axis=0)
+        # intermediate = tensions[..., None] * connectivity_mask[..., None]
+        # intermediate = connectivity * lower_mask
+        x = (d2 * lower_mask).sum(axis=0)
         accelerations += x / masses[..., None]
 
         # update velocities and apply damping
@@ -634,8 +645,10 @@ def spring_mesh(
         # position, weighted by mixer
         # TODO: we've already done this above, reuse the node displacement
         # calculation
-        disp = node_positions - orig_positions
-        mixed = mixer @ disp
+        # disp = node_positions - orig_positions
+
+        f = masses[:, None] * accelerations
+        mixed = mixer @ f
         recording[t] = mixed[0]
 
         # clear all the accumulated forces
@@ -768,8 +781,8 @@ def compare_numpy_and_torch_implementations():
 if __name__ == '__main__':
     mesh = build_string()
     # mesh = build_plate(8)
-    # samples = optimized_string_simulation(mesh, force_target=1, n_samples=2**15, samplerate=22050)
+    samples = optimized_string_simulation(mesh, force_target=1, n_samples=2**15, samplerate=22050)
 
-    samples = torch_simulation(mesh, n_samples=2**15, samplerate=22050)
+    # samples = torch_simulation(mesh, n_samples=2**15, samplerate=22050)
     # samples = class_based_spring_mesh(mesh, 3, n_samples=2**15)
-    # evaluate(samples, listen=True)
+    evaluate(samples, listen=True)
