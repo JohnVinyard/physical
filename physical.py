@@ -192,11 +192,11 @@ class SpringMesh(object):
 
     @property
     def constrained_mask(self):
-        return np.array([0 if m.fixed else 1 for m in self.all_masses], dtype=np.float32)
+        return np.array([0 if m.fixed else 1 for m in self.all_masses], dtype=np.float64)
 
     @property
     def mass_array(self) -> np.ndarray:
-        return np.array([m.mass for m in self.all_masses])
+        return np.array([m.mass for m in self.all_masses], dtype=np.float64)
 
     @property
     def masses(self):
@@ -204,7 +204,7 @@ class SpringMesh(object):
 
     @property
     def position_array(self) -> np.ndarray:
-        return np.array([m.position for m in self.all_masses])
+        return np.array([m.position for m in self.all_masses], dtype=np.float64)
 
     @property
     def tension_array(self):
@@ -481,7 +481,7 @@ def torch_spring_mesh(
         raise ValueError('tensions must be a symmetric matrix')
 
 
-    orig_positions = node_positions.clone()
+    # orig_positions = node_positions.clone()
 
     connectivity_mask: torch.Tensor = tensions > 0
 
@@ -489,17 +489,21 @@ def torch_spring_mesh(
     resting = node_positions[None, :] - node_positions[:, None]
 
     # initialize a vector to hold recorded samples from the simulation
-    recording: torch.Tensor = torch.zeros(n_samples)
+    recording: torch.Tensor = torch.zeros(n_samples, device=node_positions.device)
 
     # first derivative of node displacement
     velocities = torch.zeros_like(node_positions)
 
     accelerations = torch.zeros_like(node_positions)
 
-    ones = torch.ones(n_masses, n_masses, 1)
+    ones = torch.ones(n_masses, n_masses, 1, device=node_positions.device)
     upper_mask = torch.triu(ones)
     lower_mask = torch.tril(ones)
 
+
+    z = tensions[..., None] * connectivity_mask[..., None]
+
+    m = masses[..., None]
 
     for t in range(n_samples):
         accelerations = accelerations + forces[t]
@@ -508,10 +512,6 @@ def torch_spring_mesh(
 
         # d2 = resting - current
         # d1 = -resting + current
-
-        z = tensions[..., None] * connectivity_mask[..., None]
-
-        m = masses[..., None]
 
         # update m1
         intermediate = z * upper_mask
@@ -543,10 +543,11 @@ def torch_spring_mesh(
 
         # clear all the accumulated forces
         velocities = velocities * damping
-        # accelerations = torch.zeros_like(accelerations)
+        accelerations = torch.zeros_like(accelerations)
 
     return recording
 
+# @njit
 def spring_mesh(
         node_positions: np.ndarray,
         masses: np.ndarray,
@@ -576,6 +577,7 @@ def spring_mesh(
         forces (np.ndarray):  (n_samples, n_masses, dim)
     """
 
+
     n_masses, dim = node_positions.shape
 
     # check that the tension matrix is symmetric, since a single spring with
@@ -586,9 +588,6 @@ def spring_mesh(
     connectivity_mask: np.ndarray = tensions > 0
 
     # compute vectors representing the resting states of the springs
-    # print(node_positions.shape, node_positions[None, :].shape, node_positions[:, None].shape)
-
-    # resting = node_positions[None, :] - node_positions[:, None]
     resting = node_positions.reshape(1, n_masses, dim) - node_positions.reshape(n_masses, 1, dim)
 
     # initialize a vector to hold recorded samples from the simulation
@@ -603,19 +602,24 @@ def spring_mesh(
     upper_mask = np.triu(ones)
     lower_mask = np.tril(ones)
 
-    connectivity = tensions[..., None] * connectivity_mask[..., None]
+    # connectivity = tensions[..., None] * connectivity_mask[..., None]
+    connectivity = tensions.reshape(n_masses, n_masses, 1) * connectivity_mask.reshape(n_masses, n_masses, 1)
     upper_mask = connectivity * upper_mask
     lower_mask = connectivity * lower_mask
 
-    constrained = constrained_mask[..., None]
+    # constrained = constrained_mask[..., None]
+    constrained = constrained_mask.reshape(n_masses, 1)
 
-    mass = masses[..., None]
+    # mass = masses[..., None]
+    mass = masses.reshape(n_masses, 1)
+
 
     for t in range(n_samples):
 
         accelerations += forces[t]
 
-        current = node_positions[None, :] - node_positions[:, None]
+        # current = node_positions[None, :] - node_positions[:, None]
+        current = node_positions.reshape(1, n_masses, dim) - node_positions.reshape(n_masses, 1, dim)
 
         d2 = resting - current
         d1 = -resting + current
@@ -636,7 +640,8 @@ def spring_mesh(
         # update positions for nodes that are not constrained/fixed
         node_positions += velocities * constrained
 
-        f = masses[:, None] * accelerations
+        # f = masses[:, None] * accelerations
+        f = mass * accelerations
         mixed = mixer @ f
         recording[t] = mixed[0]
 
@@ -654,7 +659,7 @@ def torch_simulation(
         samplerate: int = 22050):
 
     compiled = mesh.compile()
-    device = torch.device('cpu')
+    device = torch.device('cuda')
     force_template = compiled.torch_full_force_template(n_samples=n_samples, device=device)
 
     force_template[16, 3, :] = torch.from_numpy(np.array([0.1, 0.1, 0])).float().to(device)
@@ -700,12 +705,6 @@ def optimized_string_simulation(
     else:
         raise ValueError('dim must be either 3 or 2')
 
-    # forces = {
-    #     2048: force_template,
-    # }
-
-
-    # forces[2048, :] = force_template
 
     start = time()
 
@@ -780,6 +779,13 @@ def compare_numpy_and_torch_implementations():
 if __name__ == '__main__':
     mesh = build_string()
     # mesh = build_plate(8)
+
+    # samples = torch_simulation(mesh, n_samples=2**15, samplerate=22050)
+    # evaluate(samples, listen=True)
+    #
+    # samples = torch_simulation(mesh, n_samples=2 ** 15, samplerate=22050)
+    # evaluate(samples, listen=True)
+
     samples = optimized_string_simulation(mesh, force_target=1, n_samples=2**15, samplerate=22050)
     evaluate(samples, listen=True)
 
