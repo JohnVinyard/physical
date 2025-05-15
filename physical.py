@@ -8,7 +8,7 @@ from subprocess import Popen, PIPE
 from scipy.signal import stft
 from time import time
 import torch
-from sympy.physics.units import acceleration
+from numba import njit, jit
 
 
 # TODO: It might be nice to move this into zounds
@@ -145,8 +145,8 @@ class CompiledSpringMesh:
     def simulation_dim(self):
         return self.positions.shape[-1]
 
-    def force_template(self):
-        return np.zeros_like(self.positions)
+    def force_template(self, n_samples):
+        return np.zeros((n_samples, self.n_nodes, self.simulation_dim))
 
     def full_force_template(self, n_samples: int) -> np.ndarray:
         return np.zeros((n_samples, *self.positions.shape))
@@ -547,7 +547,6 @@ def torch_spring_mesh(
 
     return recording
 
-
 def spring_mesh(
         node_positions: np.ndarray,
         masses: np.ndarray,
@@ -556,7 +555,7 @@ def spring_mesh(
         n_samples: int,
         mixer: np.ndarray,
         constrained_mask: np.ndarray,
-        forces: Dict[int, np.ndarray]) -> np.ndarray:
+        forces: np.ndarray) -> np.ndarray:
     """
     We assume that the node positions passed in represent the resting length
     of the springs connecting the nodes
@@ -574,23 +573,23 @@ def spring_mesh(
         constrained_mask (np.ndarray): a binary/boolean mask describing which nodes are fixed
             and immovable.  Positions will be updated via current + (change * constrained), so
             constrained nodes should be equal to 0
-        forces (Dict[int, np.ndarray]): a sparse representation of where and when forces are applied to
-            the structure, a dict mapping sample -> (n_masses, dim)
+        forces (np.ndarray):  (n_samples, n_masses, dim)
     """
 
-    n_masses = masses.shape[0]
+    n_masses, dim = node_positions.shape
 
     # check that the tension matrix is symmetric, since a single spring with
     # a fixed tension can connect two nodes
     if not np.all(tensions == tensions.T):
         raise ValueError('tensions must be a symmetric matrix')
 
-    orig_positions = node_positions.copy()
-
     connectivity_mask: np.ndarray = tensions > 0
 
     # compute vectors representing the resting states of the springs
-    resting = node_positions[None, :] - node_positions[:, None]
+    # print(node_positions.shape, node_positions[None, :].shape, node_positions[:, None].shape)
+
+    # resting = node_positions[None, :] - node_positions[:, None]
+    resting = node_positions.reshape(1, n_masses, dim) - node_positions.reshape(n_masses, 1, dim)
 
     # initialize a vector to hold recorded samples from the simulation
     recording: np.ndarray = np.zeros(n_samples)
@@ -608,15 +607,13 @@ def spring_mesh(
     upper_mask = connectivity * upper_mask
     lower_mask = connectivity * lower_mask
 
+    constrained = constrained_mask[..., None]
+
+    mass = masses[..., None]
+
     for t in range(n_samples):
 
-        # determine if any forces were applied at this time step
-        # then, update the forces acting upon each mass
-        # update the positions of each node based on the accumulated forces
-        # finally record from a single dimension of each node's position
-        f = forces.get(t, None)
-        if f is not None:
-            accelerations += f
+        accelerations += forces[t]
 
         current = node_positions[None, :] - node_positions[:, None]
 
@@ -624,28 +621,20 @@ def spring_mesh(
         d1 = -resting + current
 
         # update m1
-        # intermediate = tensions[..., None] * connectivity_mask[..., None]
-        # intermediate = connectivity * upper_mask
+        # print(d1.shape, upper_mask.shape, (d1.transpose(0, 2, 1) @ upper_mask).shape)
         x = (d1 * upper_mask).sum(axis=0)
-        accelerations += x / masses[..., None]
+        accelerations += x / mass
 
         # update m2
-        # intermediate = tensions[..., None] * connectivity_mask[..., None]
-        # intermediate = connectivity * lower_mask
         x = (d2 * lower_mask).sum(axis=0)
-        accelerations += x / masses[..., None]
+        accelerations += x / mass
+
 
         # update velocities and apply damping
         velocities += accelerations
 
         # update positions for nodes that are not constrained/fixed
-        node_positions += velocities * constrained_mask[..., None]
-
-        # record the displacement of each node, from its original
-        # position, weighted by mixer
-        # TODO: we've already done this above, reuse the node displacement
-        # calculation
-        # disp = node_positions - orig_positions
+        node_positions += velocities * constrained
 
         f = masses[:, None] * accelerations
         mixed = mixer @ f
@@ -697,16 +686,26 @@ def optimized_string_simulation(
         n_samples: int = 2 ** 15,
         samplerate: int = 22050) -> np.ndarray:
     compiled = mesh.compile()
-    force_template = compiled.force_template()
 
-    if force_template.shape[-1] == 3:
-        force_template[force_target, :] = np.array([0.1, 0.1, 0])
-    elif force_template.shape[-1] == 2:
-        force_template[force_target, :] = np.array([0.1, 0.1])
+    force_template = compiled.force_template(n_samples)
 
-    forces = {
-        2048: force_template,
-    }
+    dim = force_template.shape[-1]
+
+    forces = np.zeros_like(force_template)
+
+    if dim == 3:
+        forces[2048, force_target, :] = np.array([0.001, 0.001, 0])
+    elif dim == 2:
+        forces[2048, force_target, :] = np.array([0.1, 0.1])
+    else:
+        raise ValueError('dim must be either 3 or 2')
+
+    # forces = {
+    #     2048: force_template,
+    # }
+
+
+    # forces[2048, :] = force_template
 
     start = time()
 
@@ -782,7 +781,7 @@ if __name__ == '__main__':
     mesh = build_string()
     # mesh = build_plate(8)
     samples = optimized_string_simulation(mesh, force_target=1, n_samples=2**15, samplerate=22050)
+    evaluate(samples, listen=True)
 
-    # samples = torch_simulation(mesh, n_samples=2**15, samplerate=22050)
-    # samples = class_based_spring_mesh(mesh, 3, n_samples=2**15)
+    samples = optimized_string_simulation(mesh, force_target=1, n_samples=2 ** 15, samplerate=22050)
     evaluate(samples, listen=True)
